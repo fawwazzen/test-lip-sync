@@ -41,6 +41,8 @@ details summary{cursor:pointer;font-weight:600;font-size:14px}
 #sliders{max-height:220px;overflow:auto;margin-top:8px}
 #sliders div{display:grid;grid-template-columns:130px 1fr;gap:8px;align-items:center;font-size:12px}
 .hint{font-size:12px;margin-top:4px}
+select{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 8px;width:100%;min-width:0}
+select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 </style>
 </head>
 <body>
@@ -55,17 +57,19 @@ details summary{cursor:pointer;font-weight:600;font-size:14px}
   <div id="dock">
     <div class="top">
       <div>
-        <textarea id="txt" rows="2" aria-label="Kalimat">Selamat pagi. Senang bertemu dengan kamu.</textarea>
+        <textarea id="txt" rows="2" aria-label="Kalimat">Selamat pagi, nama saya Nani. Senang bertemu dengan kamu.</textarea>
         <p class="hint">Huruf e otomatis dibaca pepet (sêlamat, dêngan). Tulis é untuk e taling (misalnya énak).</p>
         <div class="row">
           <button class="main" id="go">Ucapkan</button>
           <button id="stop">Berhenti</button>
-          <label class="chk"><input type="checkbox" id="snd"> Suara</label>
+          <label class="chk"><input type="checkbox" id="snd" checked> Suara</label>
+          <label class="chk"><input type="checkbox" id="el"> Suara ElevenLabs</label>
           <label class="btn" for="file">Ganti model</label>
         </div>
       </div>
       <div>
-        <div class="ctl"><span>Kecepatan suara</span><input id="rate" type="range" min="0.5" max="1.5" step="0.05" value="0.80"><output id="rateO">0.80</output></div>
+        <div class="ctl"><span>Pilihan suara</span><select id="voice" aria-label="Pilihan suara"></select><output></output></div>
+        <div class="ctl"><span>Kecepatan suara</span><input id="rate" type="range" min="0.5" max="1.5" step="0.05" value="0.95"><output id="rateO">0.95</output></div>
         <div class="ctl"><span>Durasi animasi</span><input id="dur" type="range" min="0.5" max="2" step="0.05" value="1"><output id="durO">1.00</output></div>
         <p class="hint">Durasi animasi diperkirakan dari jumlah huruf. Geser sampai cocok dengan suara.</p>
       </div>
@@ -214,16 +218,69 @@ function buildSeq(text){
   });
 }
 
+function idVoices(){
+  const all = 'speechSynthesis' in window ? speechSynthesis.getVoices() : [];
+  return all.filter(v => v.lang.toLowerCase().replace('_', '-').startsWith('id'));
+}
+function fillVoices(){
+  const sel = $('voice'), keep = sel.value, list = idVoices();
+  sel.innerHTML = '';
+  if (!list.length){
+    const o = document.createElement('option');
+    o.textContent = 'Tidak ada suara Indonesia di perangkat ini';
+    sel.appendChild(o); return;
+  }
+  list.forEach(v => {
+    const o = document.createElement('option'); o.value = v.name;
+    const g = /andika|ardi/i.test(v.name) ? ' (pria)' : /gadis/i.test(v.name) ? ' (wanita)' : '';
+    o.textContent = v.name + g; sel.appendChild(o);
+  });
+  if (keep && list.some(v => v.name === keep)) sel.value = keep;
+}
+if ('speechSynthesis' in window){ fillVoices(); speechSynthesis.onvoiceschanged = fillVoices; }
+
+function seqFromAlignment(text, al){
+  const t = pepetize(text.toLowerCase());
+  const st = al.character_start_times_seconds, en = al.character_end_times_seconds;
+  const out = [];
+  for (let i = 0; i < t.length && i < st.length; i++){
+    const two = t.slice(i, i + 2);
+    if (DIG[two] && i + 1 < st.length){ out.push({ code: DIG[two], start: st[i], end: en[i + 1] }); i++; continue; }
+    out.push({ code: LET[t[i]] || 'SIL', start: st[i], end: en[i] });
+  }
+  return out;
+}
+
+let elAudio = null;
+async function speakEleven(text){
+  status('Meminta suara dari ElevenLabs…');
+  try {
+    const spoken = text.replace(/[êéə]/gi, 'e');
+    const r = await fetch('/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: spoken }) });
+    if (!r.ok) throw new Error((await r.text()).slice(0, 160));
+    const d = await r.json();
+    const al = d.alignment;
+    if (elAudio) elAudio.pause();
+    elAudio = new Audio('data:audio/mpeg;base64,' + d.audio_base64);
+    if (al && al.characters && al.characters.join('') === spoken) seq = seqFromAlignment(text, al);
+    else { buildSeq(text); status('Timing karakter tidak cocok, memakai perkiraan durasi.', true); }
+    elAudio.onplaying = () => { t0 = performance.now(); playing = true; };
+    await elAudio.play();
+    if (al) status('Suara ElevenLabs diputar, timing dari karakter.');
+  } catch (e) { status('ElevenLabs gagal: ' + e.message, true); }
+}
+
 function speak(){
   const text = $('txt').value.trim(); if (!text) return;
   if (!model){ status('Pilih file .glb dulu.', true); return; }
+  if ($('el').checked){ speechSynthesis.cancel(); speakEleven(text); return; }
   speechSynthesis.cancel();
   buildSeq(text);
   t0 = performance.now(); playing = true;
   if ($('snd').checked && 'speechSynthesis' in window){
     const u = new SpeechSynthesisUtterance(text.replace(/[êéə]/gi, 'e'));
     u.lang = 'id-ID'; u.rate = +$('rate').value;
-    const v = speechSynthesis.getVoices().find(v => v.lang.toLowerCase().startsWith('id'));
+    const v = idVoices().find(x => x.name === $('voice').value) || idVoices()[0];
     if (v) u.voice = v; else status('Suara Indonesia tidak ditemukan di perangkat ini. Animasi tetap jalan.', true);
     u.onstart = () => { t0 = performance.now(); };
     speechSynthesis.speak(u);
@@ -236,7 +293,7 @@ function pulse(code){
 }
 
 $('go').onclick = speak;
-$('stop').onclick = () => { speechSynthesis.cancel(); playing = false; };
+$('stop').onclick = () => { speechSynthesis.cancel(); if (elAudio) elAudio.pause(); playing = false; };
 $('rate').oninput = e => { $('rateO').textContent = (+e.target.value).toFixed(2); };
 $('dur').oninput = e => { $('durO').textContent = (+e.target.value).toFixed(2); };
 Object.keys(PEAK).filter(k => k !== 'SIL').forEach(k => {
