@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tes lipsync Indonesia</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#eef1f4;--surface:#ffffff;--ink:#12181f;--muted:#5b6672;--line:#d3dae1;--accent:#1b7f79;--accent-ink:#ffffff;--warn:#a4570b;color-scheme:light;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14181d;--surface:#1c2229;--ink:#e8edf2;--muted:#98a4b0;--line:#2d3640;--accent:#4fc3b8;--accent-ink:#0c1a18;--warn:#e0a35c;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#14181d;--surface:#1c2229;--ink:#e8edf2;--muted:#98a4b0;--line:#2d3640;--accent:#4fc3b8;--accent-ink:#0c1a18;--warn:#e0a35c;color-scheme:dark}
+*,*::before,*::after{box-sizing:inherit}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font:400 15px/1.5 "Instrument Sans",system-ui,-apple-system,"Segoe UI",sans-serif}
+main{height:100%;max-width:1100px;margin:0 auto;padding:12px;display:flex;flex-direction:column;gap:12px}
+h1{font-size:24px;margin:0 0 6px;font-weight:600}
+p{margin:0;color:var(--muted)}
+#stage{position:relative;flex:1 1 auto;min-height:220px;background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+#stage canvas{display:block;width:100%;height:100%}
+#empty{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px}
+#empty .box{display:grid;gap:14px;justify-items:center}
+#dock{flex:0 0 auto;max-height:46%;overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px;display:grid;gap:10px}
+.top{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:12px}
+@media (max-width:700px){.top{grid-template-columns:1fr}}
+textarea{width:100%;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;resize:none}
+textarea:focus-visible,button:focus-visible,input:focus-visible,summary:focus-visible,#filebtn:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
+button,.btn{font:inherit;font-weight:600;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 14px;cursor:pointer;display:inline-block}
+.main{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.chk{display:flex;gap:6px;align-items:center;font-size:14px}
+.ctl{display:grid;grid-template-columns:120px 1fr 38px;gap:8px;align-items:center;font-size:13px;margin-bottom:6px}
+.ctl output{text-align:right;color:var(--muted)}
+.pads{display:flex;flex-wrap:wrap;gap:6px}
+.pads button{padding:4px 10px;font-size:13px}
+#report{font-size:13px;display:grid;gap:4px;margin-top:10px}
+#report div{display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid var(--line);padding-bottom:3px}
+.ok{color:var(--accent)}.bad{color:var(--warn)}
+#status{font-size:13px;min-height:1.3em}
+details summary{cursor:pointer;font-weight:600;font-size:14px}
+#sliders{max-height:220px;overflow:auto;margin-top:8px}
+#sliders div{display:grid;grid-template-columns:130px 1fr;gap:8px;align-items:center;font-size:12px}
+.hint{font-size:12px;margin-top:4px}
+</style>
+</head>
+<body>
+<main>
+  <div id="stage">
+    <div id="empty"><div class="box">
+      <h1>Tes lipsync Indonesia</h1>
+      <p>Pilih model .glb dari komputer. Dibaca di browser dan tidak diunggah ke mana pun.</p>
+      <label class="btn main" id="filebtn" for="file">Pilih file .glb</label>
+    </div></div>
+  </div>
+  <div id="dock">
+    <div class="top">
+      <div>
+        <textarea id="txt" rows="2" aria-label="Kalimat">Selamat pagi, nama saya Nani. Senang bertemu dengan kamu.</textarea>
+        <p class="hint">Huruf e otomatis dibaca pepet (sêlamat, dêngan). Tulis é untuk e taling (misalnya énak).</p>
+        <div class="row">
+          <button class="main" id="go">Ucapkan</button>
+          <button id="stop">Berhenti</button>
+          <label class="chk"><input type="checkbox" id="snd" checked> Suara</label>
+          <label class="btn" for="file">Ganti model</label>
+        </div>
+      </div>
+      <div>
+        <div class="ctl"><span>Kecepatan suara</span><input id="rate" type="range" min="0.5" max="1.5" step="0.05" value="0.95"><output id="rateO">0.95</output></div>
+        <div class="ctl"><span>Durasi animasi</span><input id="dur" type="range" min="0.5" max="2" step="0.05" value="1"><output id="durO">1.00</output></div>
+        <p class="hint">Durasi animasi diperkirakan dari jumlah huruf. Geser sampai cocok dengan suara.</p>
+      </div>
+    </div>
+    <input id="file" type="file" accept=".glb,.gltf" hidden>
+    <div id="status" role="status"></div>
+    <details id="tools"><summary>Alat debug</summary>
+      <div class="pads" id="pads" style="margin-top:8px"></div>
+      <div id="report"><p>Belum ada model.</p></div>
+      <details style="margin-top:10px"><summary>Slider manual</summary><div id="sliders"></div></details>
+    </details>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/loaders/GLTFLoader.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+
+// ---- data fonem ----
+const MIX = {A:{viseme_aa:1},E:{viseme_E:1},PEPET:{viseme_E:.4,jawOpen:.2},I:{viseme_I:1},O:{viseme_O:1},U:{viseme_U:1},
+  W:{viseme_U:.7,mouthPucker:.3},Y:{viseme_I:.6},BMP:{viseme_PP:1},FV:{viseme_FF:1},TD:{viseme_DD:1},NL:{viseme_nn:1},
+  NY:{viseme_nn:.7,viseme_I:.3},KG:{viseme_kk:1},CJ:{viseme_CH:1},S:{viseme_SS:1},R:{viseme_RR:1},SIL:{}};
+const PEAK = {A:1,E:.9,PEPET:1,I:.9,O:1,U:1,W:1,Y:.7,BMP:1,FV:1,TD:.7,NL:.6,NY:.7,KG:.6,CJ:.8,S:.7,R:.7,SIL:0};
+const LET = {a:'A',i:'I',u:'U',o:'O',e:'E','é':'E','ê':'PEPET','ə':'PEPET',p:'BMP',b:'BMP',m:'BMP',f:'FV',v:'FV',t:'TD',d:'TD',
+  n:'NL',l:'NL',k:'KG',g:'KG',q:'KG',c:'CJ',j:'CJ',s:'S',z:'S',x:'S',r:'R',w:'W',y:'Y'};
+const DIG = {ng:'KG',ny:'NY',kh:'KG',sy:'CJ'};
+const VOW = new Set(['A','E','I','O','U','PEPET']);
+
+// e otomatis pepet; taling hanya untuk kata pengecualian, e di akhir kata, atau yang ditandai é
+const TALING = {enak:'énak',teh:'téh',mereka:'mêréka',tempe:'têmpé',nenek:'nénék',kakek:'kakék',bebek:'bébék',ember:'émbêr',meja:'méja',merah:'mérah',ekor:'ékor',bensin:'bénsin',kereta:'kêréta'};
+function pepetize(t){
+  return t.replace(/[a-zêéə]+/g, w => {
+    if (/[êéə]/.test(w)) return w;
+    if (TALING[w]) return TALING[w];
+    return w.replace(/e/g, (c, i) => (i === w.length - 1 || (i === w.length - 2 && w[w.length - 1] === 'k')) ? 'é' : 'ê');
+  });
+}
+
+function toCodes(text){
+  const t = pepetize(text.toLowerCase()), out = [];
+  for (let i = 0; i < t.length; i++){
+    const two = t.slice(i, i + 2);
+    if (DIG[two]){ out.push(DIG[two]); i++; continue; }
+    const c = t[i];
+    if (LET[c]) out.push(LET[c]);
+    else if (/[.,!?;:]/.test(c)) out.push('SIL','SIL');
+    else out.push('SIL');
+  }
+  return out;
+}
+
+// ---- three.js ----
+const stage = $('stage');
+const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
+renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+stage.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(30, 1, 0.01, 100);
+camera.position.set(0, 1.5, 1);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x667788, 1.0));
+const sun = new THREE.DirectionalLight(0xffffff, 1.4); sun.position.set(1, 2, 3); scene.add(sun);
+new ResizeObserver(() => {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
+}).observe(stage);
+
+let model = null, meshes = [], hasId = false, driven = [];
+const cur = {}, manual = {};
+
+function status(msg, bad){ const s = $('status'); s.textContent = msg; s.className = bad ? 'bad' : 'ok'; }
+
+$('file').onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  status('Membaca model…');
+  const r = new FileReader();
+  r.onload = () => new THREE.GLTFLoader().parse(r.result, '', onLoad, err => status('Gagal membaca model: ' + (err.message || err), true));
+  r.readAsArrayBuffer(f);
+};
+
+function onLoad(gltf){
+  if (model) scene.remove(model);
+  model = gltf.scene; scene.add(model);
+  $('empty').style.display = 'none';
+  meshes = []; const names = new Set(); const rows = [];
+  model.traverse(o => {
+    if (!o.isMesh) return;
+    const d = o.morphTargetDictionary;
+    if (d){ meshes.push(o); Object.keys(d).forEach(k => names.add(k)); }
+    rows.push(o);
+  });
+  hasId = names.has('id_A');
+  driven = [...names].filter(n => /^(id_|viseme_)/.test(n) || n === 'jawOpen' || n === 'mouthPucker').sort();
+  driven.forEach(n => { cur[n] = 0; manual[n] = 0; });
+  // framing kepala
+  const box = new THREE.Box3().setFromObject(model);
+  const h = box.max.y - box.min.y, c = box.getCenter(new THREE.Vector3());
+  const ty = box.max.y - h * 0.07;
+  controls.target.set(c.x, ty, c.z);
+  camera.position.set(c.x, ty, c.z + h * 0.45);
+  controls.update();
+  // laporan
+  const rep = $('report'); rep.innerHTML = '';
+  rows.forEach(o => {
+    const d = o.morphTargetDictionary, div = document.createElement('div');
+    const n = d ? Object.keys(d).length : 0;
+    const tag = k => d && k in d ? '<span class="ok">' + k + ' ada</span>' : '<span class="bad">' + k + ' tidak ada</span>';
+    div.innerHTML = '<span>' + o.name + '</span><span>' + (d ? n + ' key · ' + tag(hasId ? 'id_A' : 'viseme_aa') + ' · ' + tag('jawOpen') : '<span class="bad">tanpa morph target</span>') + '</span>';
+    rep.appendChild(div);
+  });
+  const sl = $('sliders'); sl.innerHTML = '';
+  driven.forEach(n => {
+    const row = document.createElement('div');
+    row.innerHTML = '<span>' + n + '</span><input type="range" min="0" max="1" step="0.01" value="0" aria-label="' + n + '">';
+    row.querySelector('input').oninput = ev => { manual[n] = +ev.target.value; };
+    sl.appendChild(row);
+  });
+  status(hasId ? 'Model dimuat. Memakai key id_* (' + driven.filter(n => n.startsWith('id_')).length + ' key).'
+               : 'Model dimuat. Key id_* tidak ada, memakai campuran viseme_* sebagai cadangan.');
+}
+
+// ---- pemetaan fonem ke morph ----
+function targetFor(code){
+  if (code === 'SIL') return {};
+  if (hasId) return {['id_' + code]: PEAK[code]};
+  const m = {};
+  for (const k in MIX[code]) m[k] = MIX[code][k] * PEAK[code];
+  return m;
+}
+
+// ---- pemutaran ----
+let seq = [], t0 = 0, playing = false;
+
+function buildSeq(text){
+  const codes = toCodes(text);
+  const unit = 0.1 * (+$('dur').value);
+  let t = 0;
+  seq = codes.map(c => {
+    const w = c === 'SIL' ? 0.6 : VOW.has(c) ? 1 : 0.5;
+    const s = { code: c, start: t, end: t + w * unit };
+    t += w * unit; return s;
+  });
+}
+
+function speak(){
+  const text = $('txt').value.trim(); if (!text) return;
+  if (!model){ status('Pilih file .glb dulu.', true); return; }
+  speechSynthesis.cancel();
+  buildSeq(text);
+  t0 = performance.now(); playing = true;
+  if ($('snd').checked && 'speechSynthesis' in window){
+    const u = new SpeechSynthesisUtterance(text.replace(/[êéə]/gi, 'e'));
+    u.lang = 'id-ID'; u.rate = +$('rate').value;
+    const v = speechSynthesis.getVoices().find(v => v.lang.toLowerCase().startsWith('id'));
+    if (v) u.voice = v; else status('Suara Indonesia tidak ditemukan di perangkat ini. Animasi tetap jalan.', true);
+    u.onstart = () => { t0 = performance.now(); };
+    speechSynthesis.speak(u);
+  }
+}
+
+function pulse(code){
+  speechSynthesis.cancel();
+  seq = [{ code, start: 0, end: 0.7 }]; t0 = performance.now(); playing = true;
+}
+
+$('go').onclick = speak;
+$('stop').onclick = () => { speechSynthesis.cancel(); playing = false; };
+$('rate').oninput = e => { $('rateO').textContent = (+e.target.value).toFixed(2); };
+$('dur').oninput = e => { $('durO').textContent = (+e.target.value).toFixed(2); };
+Object.keys(PEAK).filter(k => k !== 'SIL').forEach(k => {
+  const b = document.createElement('button'); b.textContent = k; b.onclick = () => pulse(k); $('pads').appendChild(b);
+});
+
+function tick(){
+  requestAnimationFrame(tick);
+  controls.update();
+  let auto = {};
+  if (playing && seq.length){
+    const now = (performance.now() - t0) / 1000;
+    const it = seq.find(s => now >= s.start && now < s.end);
+    if (it) auto = targetFor(it.code);
+    else if (now > seq[seq.length - 1].end + 0.2) playing = false;
+  }
+  for (const n of driven){
+    const tgt = Math.max(auto[n] || 0, manual[n] || 0);
+    cur[n] += (tgt - cur[n]) * 0.3;
+    for (const m of meshes){
+      const i = m.morphTargetDictionary[n];
+      if (i !== undefined) m.morphTargetInfluences[i] = cur[n];
+    }
+  }
+  renderer.render(scene, camera);
+}
+tick();
+</script>
+</body>
+</html>
