@@ -43,6 +43,7 @@ details summary{cursor:pointer;font-weight:600;font-size:14px}
 .hint{font-size:12px;margin-top:4px}
 select{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 8px;width:100%;min-width:0}
 select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+[hidden]{display:none!important}
 </style>
 </head>
 <body>
@@ -57,7 +58,7 @@ select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   <div id="dock">
     <div class="top">
       <div>
-        <textarea id="txt" rows="2" aria-label="Kalimat">Selamat pagi, nama saya Nani. Senang bertemu dengan kamu.</textarea>
+        <textarea id="txt" rows="2" aria-label="Kalimat">Selamat pagi. Senang bertemu dengan kamu.</textarea>
         <p class="hint">Huruf e otomatis dibaca pepet (sêlamat, dêngan). Tulis é untuk e taling (misalnya énak).</p>
         <div class="row">
           <button class="main" id="go">Ucapkan</button>
@@ -75,6 +76,11 @@ select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
       </div>
     </div>
     <input id="file" type="file" accept=".glb,.gltf" hidden>
+    <div class="row" id="animrow" hidden>
+      <select id="clip" aria-label="Animasi" style="flex:1;min-width:140px"></select>
+      <button id="pp">Jeda</button>
+      <button id="cam">Kamera: wajah</button>
+    </div>
     <div id="status" role="status"></div>
     <details id="tools"><summary>Alat debug</summary>
       <div class="pads" id="pads" style="margin-top:8px"></div>
@@ -154,9 +160,51 @@ $('file').onchange = e => {
   r.readAsArrayBuffer(f);
 };
 
+let mixer = null, action = null, clips = [], frameInfo = null, fullBody = false, paused = false;
+const clock = new THREE.Clock();
+
+function frameCam(full){
+  if (!frameInfo) return;
+  const { c, h, box } = frameInfo;
+  if (full){
+    const y = (box.min.y + box.max.y) / 2;
+    controls.target.set(c.x, y, c.z);
+    camera.position.set(c.x, y, c.z + h * 2.2);
+  } else {
+    const y = box.max.y - h * 0.07;
+    controls.target.set(c.x, y, c.z);
+    camera.position.set(c.x, y, c.z + h * 0.45);
+  }
+  controls.update();
+}
+
+function playClip(i){
+  if (!mixer || !clips[i]) return;
+  if (action) action.fadeOut(0.25);
+  action = mixer.clipAction(clips[i]).reset().fadeIn(0.25).play();
+  action.paused = paused;
+}
+
+function setupAnim(list){
+  if (mixer) mixer.stopAllAction();
+  mixer = null; action = null; clips = list;
+  const row = $('animrow'), sel = $('clip');
+  sel.innerHTML = '';
+  if (!list.length){ row.hidden = true; return; }
+  mixer = new THREE.AnimationMixer(model);
+  list.forEach((c, i) => {
+    const o = document.createElement('option');
+    o.value = i; o.textContent = c.name + ' (' + c.duration.toFixed(1) + ' dtk)';
+    sel.appendChild(o);
+  });
+  row.hidden = false;
+  playClip(0);
+}
+
 function onLoad(gltf){
   if (model) scene.remove(model);
   model = gltf.scene; scene.add(model);
+  setupAnim(gltf.animations || []);
   $('empty').style.display = 'none';
   meshes = []; const names = new Set(); const rows = [];
   model.traverse(o => {
@@ -172,9 +220,9 @@ function onLoad(gltf){
   const box = new THREE.Box3().setFromObject(model);
   const h = box.max.y - box.min.y, c = box.getCenter(new THREE.Vector3());
   const ty = box.max.y - h * 0.07;
-  controls.target.set(c.x, ty, c.z);
-  camera.position.set(c.x, ty, c.z + h * 0.45);
-  controls.update();
+  frameInfo = { c, h, box };
+  fullBody = false; $('cam').textContent = 'Kamera: wajah';
+  frameCam(false);
   // laporan
   const rep = $('report'); rep.innerHTML = '';
   rows.forEach(o => {
@@ -300,8 +348,20 @@ Object.keys(PEAK).filter(k => k !== 'SIL').forEach(k => {
   const b = document.createElement('button'); b.textContent = k; b.onclick = () => pulse(k); $('pads').appendChild(b);
 });
 
+$('clip').onchange = e => playClip(+e.target.value);
+$('pp').onclick = () => {
+  paused = !paused;
+  if (action) action.paused = paused;
+  $('pp').textContent = paused ? 'Lanjut' : 'Jeda';
+};
+$('cam').onclick = () => {
+  fullBody = !fullBody; frameCam(fullBody);
+  $('cam').textContent = fullBody ? 'Kamera: badan' : 'Kamera: wajah';
+};
+
 function tick(){
   requestAnimationFrame(tick);
+  if (mixer) mixer.update(clock.getDelta()); else clock.getDelta();
   controls.update();
   let auto = {};
   if (playing && seq.length){
