@@ -73,8 +73,10 @@ select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
         <div class="ctl"><span>Kecepatan suara</span><input id="rate" type="range" min="0.5" max="1.5" step="0.05" value="0.95"><output id="rateO">0.95</output></div>
         <div class="ctl"><span>Durasi animasi</span><input id="dur" type="range" min="0.5" max="2" step="0.05" value="1"><output id="durO">1.00</output></div>
         <div class="ctl"><span>Ekspresi</span><select id="emo" aria-label="Ekspresi"><option value="auto">Otomatis dari teks</option><option value="neutral">Netral</option><option value="happy">Senang</option><option value="sad">Sedih</option><option value="angry">Marah</option><option value="surprised">Terkejut</option><option value="thinking">Berpikir</option></select><output></output></div>
-        <div class="ctl"><span>Kekuatan ekspresi</span><input id="emoI" type="range" min="0" max="1" step="0.05" value="0.7"><output id="emoIO">0.70</output></div>
+        <div class="ctl"><span>Kekuatan ekspresi</span><input id="emoI" type="range" min="0" max="1.5" step="0.05" value="1"><output id="emoIO">1.00</output></div>
         <label class="chk"><input type="checkbox" id="idle" checked> Gerak idle otomatis (kedip, arah pandang, ekspresi halus)</label>
+        <label class="chk"><input type="checkbox" id="face" checked> Kepala dan mata menghadap kamera</label>
+        <div class="ctl"><span>Tatapan ke kamera</span><input id="look" type="range" min="0" max="1" step="0.05" value="0.75"><output id="lookO">0.75</output></div>
         <p class="hint">Durasi animasi diperkirakan dari jumlah huruf. Geser sampai cocok dengan suara.</p>
       </div>
     </div>
@@ -207,6 +209,10 @@ function setupAnim(list){
 function onLoad(gltf){
   if (model) scene.remove(model);
   model = gltf.scene; scene.add(model);
+  headBone = model.getObjectByName('mixamorigHead') || null;
+  if (!headBone) model.traverse(o => { if (!headBone && o.isBone && /head$/i.test(o.name)) headBone = o; });
+  headBase = headBone ? headBone.quaternion.clone() : null;
+  hy = hp = ey = ep = 0;
   setupAnim(gltf.animations || []);
   $('empty').style.display = 'none';
   meshes = []; const names = new Set(); const rows = [];
@@ -326,6 +332,7 @@ function speak(){
   const text = $('txt').value.trim(); if (!text) return;
   if (!model){ status('Pilih file .glb dulu.', true); return; }
   autoEmo = detectEmotion(text);
+  autoGain = text.includes('!') ? 1.25 : 1;
   if ($('el').checked){ speechSynthesis.cancel(); speakEleven(text); return; }
   speechSynthesis.cancel();
   buildSeq(text);
@@ -340,23 +347,33 @@ function speak(){
   }
 }
 
-// ---- ekspresi otomatis (ARKit) ----
+// ---- ekspresi otomatis (ARKit), tatapan, dan gerak kepala ----
+const DEG = Math.PI / 180;
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const EMO = {
-  neutral: {},
-  happy: { mouthSmileLeft: .5, mouthSmileRight: .5, cheekSquintLeft: .3, cheekSquintRight: .3, eyeSquintLeft: .2, eyeSquintRight: .2, browInnerUp: .1 },
-  sad: { browInnerUp: .6, mouthFrownLeft: .4, mouthFrownRight: .4, eyeLookDownLeft: .2, eyeLookDownRight: .2 },
-  angry: { browDownLeft: .6, browDownRight: .6, noseSneerLeft: .3, noseSneerRight: .3, eyeSquintLeft: .3, eyeSquintRight: .3, mouthPressLeft: .2, mouthPressRight: .2 },
-  surprised: { browInnerUp: .7, browOuterUpLeft: .6, browOuterUpRight: .6, eyeWideLeft: .6, eyeWideRight: .6 },
-  thinking: { browInnerUp: .3, browDownLeft: .2, mouthLeft: .2, eyeLookUpLeft: .3, eyeLookUpRight: .3 }
+  neutral: { mouthSmileLeft: .08, mouthSmileRight: .08 },
+  happy: { mouthSmileLeft: .8, mouthSmileRight: .8, cheekSquintLeft: .55, cheekSquintRight: .55, eyeSquintLeft: .35, eyeSquintRight: .35, browInnerUp: .15, browOuterUpLeft: .15, browOuterUpRight: .15 },
+  sad: { browInnerUp: .85, browDownLeft: .15, browDownRight: .15, mouthFrownLeft: .55, mouthFrownRight: .55, mouthShrugLower: .2, eyeBlinkLeft: .18, eyeBlinkRight: .18, eyeSquintLeft: .1, eyeSquintRight: .1 },
+  angry: { browDownLeft: .9, browDownRight: .9, noseSneerLeft: .4, noseSneerRight: .4, eyeSquintLeft: .4, eyeSquintRight: .4, eyeWideLeft: .15, eyeWideRight: .15, mouthPressLeft: .35, mouthPressRight: .35, mouthFrownLeft: .25, mouthFrownRight: .25, jawForward: .1 },
+  surprised: { browInnerUp: .9, browOuterUpLeft: .85, browOuterUpRight: .85, eyeWideLeft: .9, eyeWideRight: .9, jawOpen: .12 },
+  thinking: { browInnerUp: .25, browDownLeft: .35, browOuterUpRight: .45, eyeSquintLeft: .2, eyeSquintRight: .15, mouthLeft: .25, mouthPressRight: .15, mouthFunnel: .05 }
 };
+// away = kecenderungan memalingkan pandangan, dy = arah vertikal saat memalingkan (positif = atas)
+const EMO_GAZE = { neutral: { away: .25, dy: 0 }, happy: { away: .15, dy: .05 }, sad: { away: .5, dy: -.5 }, angry: { away: .1, dy: 0 }, surprised: { away: .1, dy: .1 }, thinking: { away: .7, dy: .45 } };
+const EMO_BLINK = { neutral: 1, happy: 1, sad: .7, angry: .5, surprised: .35, thinking: 1 };
 const IDLE_KEYS = ['eyeBlinkLeft','eyeBlinkRight','eyeLookInLeft','eyeLookInRight','eyeLookOutLeft','eyeLookOutRight',
-  'eyeLookUpLeft','eyeLookUpRight','eyeLookDownLeft','eyeLookDownRight','browInnerUp','browOuterUpLeft','browOuterUpRight',
-  'mouthSmileLeft','mouthSmileRight'];
+  'eyeLookUpLeft','eyeLookUpRight','eyeLookDownLeft','eyeLookDownRight','eyeWideLeft','eyeWideRight',
+  'browInnerUp','browOuterUpLeft','browOuterUpRight','mouthSmileLeft','mouthSmileRight'];
 const EXPR_KEYS = new Set([...IDLE_KEYS, ...Object.values(EMO).flatMap(o => Object.keys(o))]);
 const MOUTHKEY = /^(mouth|jaw|tongue|cheekPuff)/;
-let autoEmo = 'neutral', holdUntil = 0, wasPlaying = false, spk = 0;
-let nextBlink = 1.5, blinkStart = -1, nextGaze = 1;
-const emoCur = {}, gaze = { x: 0, y: 0, tx: 0, ty: 0 };
+const SMILEKEY = /^mouthSmile/;
+let autoEmo = 'neutral', autoGain = 1, holdUntil = 0, wasPlaying = false, spk = 0;
+let curCode = 'SIL', prevSil = true, emph = 0, flick = 0, nextFlick = 4;
+let nextBlink = 1.5, blinkStart = -1, blinkVal = 0, nextGaze = 0, nextJit = 0;
+let headBone = null, headBase = null, hy = 0, hp = 0, ey = 0, ep = 0, jx = 0, jy = 0;
+const emoCur = {}, att = { away: false, yaw: 0, pitch: 0 };
+const _v = new THREE.Vector3(), _hp = new THREE.Vector3(), _mq = new THREE.Quaternion(),
+  _pq = new THREE.Quaternion(), _dq = new THREE.Quaternion(), _e = new THREE.Euler();
 
 function detectEmotion(text){
   const s = text.toLowerCase();
@@ -368,57 +385,116 @@ function detectEmotion(text){
   return 'neutral';
 }
 
+// sudut (derajat) dari kepala karakter ke kamera, relatif terhadap arah hadap model
+function camAngles(){
+  if (!headBone) return { yaw: 0, pitch: 0 };
+  headBone.getWorldPosition(_hp);
+  _v.copy(camera.position).sub(_hp);
+  model.getWorldQuaternion(_mq);
+  _v.applyQuaternion(_mq.invert());
+  return { yaw: Math.atan2(_v.x, _v.z) / DEG, pitch: Math.atan2(_v.y, Math.hypot(_v.x, _v.z)) / DEG };
+}
+
+// putar tulang kepala di ruang dunia, apa pun orientasi sumbu tulangnya
+function applyHead(yaw, pitch){
+  _e.set(-pitch * DEG, yaw * DEG, 0, 'YXZ');
+  _dq.setFromEuler(_e);
+  model.getWorldQuaternion(_mq);
+  const D = _mq.clone().multiply(_dq).multiply(_mq.clone().invert());
+  headBone.parent.updateWorldMatrix(true, false);
+  headBone.parent.getWorldQuaternion(_pq);
+  headBone.quaternion.premultiply(_pq).premultiply(D).premultiply(_pq.clone().invert());
+}
+
+function decideGaze(t, name){
+  const g = EMO_GAZE[name] || EMO_GAZE.neutral;
+  const f = +$('look').value;
+  const pAway = Math.min(0.95, (1 - f) * g.away / 0.25);
+  if (Math.random() < pAway){
+    att.away = true;
+    nextGaze = t + 0.8 + Math.random() * 1.8;
+    att.yaw = (Math.random() < 0.5 ? -1 : 1) * (10 + Math.random() * 20);
+    att.pitch = g.dy * 20 + (Math.random() - 0.5) * 8;
+    if (Math.random() < 0.5) nextBlink = t + 0.05;
+  } else {
+    att.away = false;
+    nextGaze = t + 1.2 + Math.random() * 2.8;
+  }
+}
+
 function exprFrame(t){
   const out = {};
   const add = (k, v) => { out[k] = (out[k] || 0) + v; };
-  // emosi (berubah halus), area mulut dikecilkan saat bicara
+  // 1. emosi: berubah halus, area mulut dikecilkan saat bicara
   if (wasPlaying && !playing) holdUntil = t + 1.5;
   wasPlaying = playing;
   spk += ((playing ? 1 : 0) - spk) * 0.1;
-  const sel = $('emo').value, inten = +$('emoI').value;
+  const sel = $('emo').value;
   const name = sel !== 'auto' ? sel : (playing || t < holdUntil ? autoEmo : 'neutral');
+  const inten = +$('emoI').value * (sel === 'auto' ? autoGain : 1);
   const tgt = EMO[name] || {};
   new Set([...Object.keys(emoCur), ...Object.keys(tgt)]).forEach(k => {
-    emoCur[k] = (emoCur[k] || 0) + ((tgt[k] || 0) * inten - (emoCur[k] || 0)) * 0.05;
-    add(k, emoCur[k] * (MOUTHKEY.test(k) ? 1 - 0.65 * spk : 1));
+    emoCur[k] = (emoCur[k] || 0) + ((tgt[k] || 0) * inten - (emoCur[k] || 0)) * 0.08;
+    const a = MOUTHKEY.test(k) ? 1 - (SMILEKEY.test(k) ? 0.4 : 0.65) * spk : 1;
+    add(k, emoCur[k] * a);
   });
-  if (!$('idle').checked) return out;
-  // kedip acak
+  const face = $('face').checked;
+  if (!$('idle').checked){
+    if (headBone && !face && !(mixer && action)) headBone.quaternion.copy(headBase);
+    return out;
+  }
+  // 2. penekanan kata dan gerak alis spontan
+  const isSil = curCode === 'SIL';
+  if (playing && prevSil && !isSil && Math.random() < 0.4) emph = 1;
+  prevSil = isSil; emph *= 0.94;
+  if (t >= nextFlick){ flick = 1; nextFlick = t + 3 + Math.random() * 5; }
+  flick *= 0.95;
+  add('browInnerUp', 0.3 * emph + 0.25 * flick + 0.04 + 0.04 * Math.sin(t * 0.7) + 0.02 * Math.sin(t * 1.9 + 1));
+  add('browOuterUpLeft', 0.35 * emph + 0.2 * flick);
+  add('browOuterUpRight', 0.35 * emph + 0.25 * flick);
+  add('eyeWideLeft', 0.1 * emph); add('eyeWideRight', 0.1 * emph);
+  const sm = (0.04 + 0.03 * Math.sin(t * 0.5 + 2)) * (1 - 0.6 * spk);
+  add('mouthSmileLeft', sm); add('mouthSmileRight', sm * 0.9);
+  // 3. kedip: lebih jarang saat terkejut atau marah, lebih lambat saat sedih
+  const br = EMO_BLINK[name] || 1;
   if (t >= nextBlink){
     blinkStart = t;
-    nextBlink = t + (Math.random() < 0.15 ? 0.35 : 2.5 + Math.random() * 3.5);
+    nextBlink = t + (2.5 + Math.random() * 3.5) / br;
+    if (Math.random() < 0.12) nextBlink = t + 0.3;
   }
+  blinkVal = 0;
   if (blinkStart >= 0){
-    const p = (t - blinkStart) / 0.16;
-    if (p >= 1) blinkStart = -1;
-    else { const b = Math.sin(p * Math.PI); add('eyeBlinkLeft', b); add('eyeBlinkRight', b); }
+    const p = (t - blinkStart) / 0.17;
+    if (p >= 1) blinkStart = -1; else blinkVal = Math.sin(p * Math.PI);
   }
-  // arah pandang berpindah pelan
-  if (t >= nextGaze){
-    nextGaze = t + 1.5 + Math.random() * 3;
-    const k = Math.random() < 0.5 ? 0.25 : 1;
-    gaze.tx = (Math.random() - 0.5) * 0.7 * k;
-    gaze.ty = (Math.random() - 0.5) * 0.4 * k;
-  }
-  gaze.x += (gaze.tx - gaze.x) * 0.08;
-  gaze.y += (gaze.ty - gaze.y) * 0.08;
-  const ax = Math.abs(gaze.x), ay = Math.abs(gaze.y);
-  add(gaze.x > 0 ? 'eyeLookInLeft' : 'eyeLookOutLeft', ax);
-  add(gaze.x > 0 ? 'eyeLookOutRight' : 'eyeLookInRight', ax);
-  add(gaze.y > 0 ? 'eyeLookUpLeft' : 'eyeLookDownLeft', ay);
-  add(gaze.y > 0 ? 'eyeLookUpRight' : 'eyeLookDownRight', ay);
-  // gerak mikro agar wajah tidak membeku
-  add('browInnerUp', 0.06 + 0.05 * Math.sin(t * 0.7) + 0.03 * Math.sin(t * 1.9 + 1));
-  const sm = (0.06 + 0.04 * Math.sin(t * 0.5 + 2)) * (1 - 0.6 * spk);
-  add('mouthSmileLeft', sm); add('mouthSmileRight', sm);
-  // alis ikut bergerak saat bicara
-  if (spk > 0.05){
-    const e = spk * (0.08 + 0.08 * Math.max(0, Math.sin(t * 2.3)));
-    add('browInnerUp', e); add('browOuterUpLeft', e); add('browOuterUpRight', e);
+  add('eyeBlinkLeft', blinkVal); add('eyeBlinkRight', blinkVal);
+  // 4. tatapan: sebagian besar ke kamera, sesekali berpaling sesuai emosi
+  if (t >= nextGaze) decideGaze(t, name);
+  const cam = face ? camAngles() : { yaw: 0, pitch: 0 };
+  const aw = att.away ? 1 : 0;
+  const goalYaw = cam.yaw + att.yaw * aw;
+  const goalPitch = cam.pitch + att.pitch * aw;
+  // kepala mengikuti pelan dan tidak penuh, mata mengejar lebih cepat
+  const hTY = clamp(goalYaw * 0.7, -35, 35) + 1.8 * Math.sin(t * 0.37);
+  const hTP = clamp(goalPitch * 0.6, -15, 15) + 1.2 * Math.sin(t * 0.53 + 1) - 4 * emph;
+  hy += (hTY - hy) * 0.05; hp += (hTP - hp) * 0.05;
+  if (t >= nextJit){ nextJit = t + 0.25 + Math.random() * 0.8; jx = (Math.random() - 0.5) * 1.6; jy = (Math.random() - 0.5) * 1.2; }
+  const eTY = clamp(goalYaw - hy, -22, 22) + jx, eTP = clamp(goalPitch - hp, -16, 16) + jy;
+  ey += (eTY - ey) * 0.3; ep += (eTP - ep) * 0.3;
+  const gx = clamp(ey / 22, -1, 1) * 0.85, gy = clamp(ep / 16, -1, 1) * 0.85;
+  if (gx > 0){ add('eyeLookOutLeft', gx); add('eyeLookInRight', gx); } else { add('eyeLookInLeft', -gx); add('eyeLookOutRight', -gx); }
+  if (gy > 0){ add('eyeLookUpLeft', gy); add('eyeLookUpRight', gy); } else { add('eyeLookDownLeft', -gy); add('eyeLookDownRight', -gy); }
+  // mata yang menutup saat berkedip tidak boleh melebar atau melirik ke atas
+  if (blinkVal > 0) ['eyeWideLeft','eyeWideRight','eyeLookUpLeft','eyeLookUpRight'].forEach(k => { if (out[k]) out[k] *= (1 - blinkVal); });
+  // 5. tulang kepala
+  if (headBone){
+    if (!(mixer && action)) headBone.quaternion.copy(headBase);
+    if (face) applyHead(hy, hp);
   }
   return out;
 }
 $('emoI').oninput = e => { $('emoIO').textContent = (+e.target.value).toFixed(2); };
+$('look').oninput = e => { $('lookO').textContent = (+e.target.value).toFixed(2); };
 
 function pulse(code){
   speechSynthesis.cancel();
@@ -448,17 +524,17 @@ function tick(){
   requestAnimationFrame(tick);
   if (mixer) mixer.update(clock.getDelta()); else clock.getDelta();
   controls.update();
-  let auto = {};
+  let auto = {}; curCode = 'SIL';
   if (playing && seq.length){
     const now = (performance.now() - t0) / 1000;
     const it = seq.find(s => now >= s.start && now < s.end);
-    if (it) auto = targetFor(it.code);
+    if (it){ auto = targetFor(it.code); curCode = it.code; }
     else if (now > seq[seq.length - 1].end + 0.2) playing = false;
   }
   const ex = exprFrame(performance.now() / 1000);
   for (const n of driven){
     const tgt = Math.min(1, Math.max((auto[n] || 0) + (ex[n] || 0), manual[n] || 0));
-    cur[n] += (tgt - cur[n]) * (/Blink/.test(n) ? 0.7 : 0.3);
+    cur[n] += (tgt - cur[n]) * (/Blink/.test(n) ? 0.7 : /^eyeLook/.test(n) ? 0.5 : 0.3);
     for (const m of meshes){
       const i = m.morphTargetDictionary[n];
       if (i !== undefined) m.morphTargetInfluences[i] = cur[n];
