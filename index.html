@@ -72,6 +72,9 @@ select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
         <div class="ctl"><span>Pilihan suara</span><select id="voice" aria-label="Pilihan suara"></select><output></output></div>
         <div class="ctl"><span>Kecepatan suara</span><input id="rate" type="range" min="0.5" max="1.5" step="0.05" value="0.95"><output id="rateO">0.95</output></div>
         <div class="ctl"><span>Durasi animasi</span><input id="dur" type="range" min="0.5" max="2" step="0.05" value="1"><output id="durO">1.00</output></div>
+        <div class="ctl"><span>Ekspresi</span><select id="emo" aria-label="Ekspresi"><option value="auto">Otomatis dari teks</option><option value="neutral">Netral</option><option value="happy">Senang</option><option value="sad">Sedih</option><option value="angry">Marah</option><option value="surprised">Terkejut</option><option value="thinking">Berpikir</option></select><output></output></div>
+        <div class="ctl"><span>Kekuatan ekspresi</span><input id="emoI" type="range" min="0" max="1" step="0.05" value="0.7"><output id="emoIO">0.70</output></div>
+        <label class="chk"><input type="checkbox" id="idle" checked> Gerak idle otomatis (kedip, arah pandang, ekspresi halus)</label>
         <p class="hint">Durasi animasi diperkirakan dari jumlah huruf. Geser sampai cocok dengan suara.</p>
       </div>
     </div>
@@ -214,7 +217,8 @@ function onLoad(gltf){
     rows.push(o);
   });
   hasId = names.has('id_A');
-  driven = [...names].filter(n => /^(id_|viseme_)/.test(n) || n === 'jawOpen' || n === 'mouthPucker').sort();
+  driven = [...names].filter(n => /^(id_|viseme_)/.test(n) || n === 'jawOpen' || n === 'mouthPucker' || EXPR_KEYS.has(n)).sort();
+  if (![...names].some(n => EXPR_KEYS.has(n))) setTimeout(() => status('Peringatan: key ARKit (eyeBlinkLeft dan sejenisnya) tidak ditemukan, ekspresi otomatis tidak aktif.', true), 0);
   driven.forEach(n => { cur[n] = 0; manual[n] = 0; });
   // framing kepala
   const box = new THREE.Box3().setFromObject(model);
@@ -321,6 +325,7 @@ async function speakEleven(text){
 function speak(){
   const text = $('txt').value.trim(); if (!text) return;
   if (!model){ status('Pilih file .glb dulu.', true); return; }
+  autoEmo = detectEmotion(text);
   if ($('el').checked){ speechSynthesis.cancel(); speakEleven(text); return; }
   speechSynthesis.cancel();
   buildSeq(text);
@@ -334,6 +339,86 @@ function speak(){
     speechSynthesis.speak(u);
   }
 }
+
+// ---- ekspresi otomatis (ARKit) ----
+const EMO = {
+  neutral: {},
+  happy: { mouthSmileLeft: .5, mouthSmileRight: .5, cheekSquintLeft: .3, cheekSquintRight: .3, eyeSquintLeft: .2, eyeSquintRight: .2, browInnerUp: .1 },
+  sad: { browInnerUp: .6, mouthFrownLeft: .4, mouthFrownRight: .4, eyeLookDownLeft: .2, eyeLookDownRight: .2 },
+  angry: { browDownLeft: .6, browDownRight: .6, noseSneerLeft: .3, noseSneerRight: .3, eyeSquintLeft: .3, eyeSquintRight: .3, mouthPressLeft: .2, mouthPressRight: .2 },
+  surprised: { browInnerUp: .7, browOuterUpLeft: .6, browOuterUpRight: .6, eyeWideLeft: .6, eyeWideRight: .6 },
+  thinking: { browInnerUp: .3, browDownLeft: .2, mouthLeft: .2, eyeLookUpLeft: .3, eyeLookUpRight: .3 }
+};
+const IDLE_KEYS = ['eyeBlinkLeft','eyeBlinkRight','eyeLookInLeft','eyeLookInRight','eyeLookOutLeft','eyeLookOutRight',
+  'eyeLookUpLeft','eyeLookUpRight','eyeLookDownLeft','eyeLookDownRight','browInnerUp','browOuterUpLeft','browOuterUpRight',
+  'mouthSmileLeft','mouthSmileRight'];
+const EXPR_KEYS = new Set([...IDLE_KEYS, ...Object.values(EMO).flatMap(o => Object.keys(o))]);
+const MOUTHKEY = /^(mouth|jaw|tongue|cheekPuff)/;
+let autoEmo = 'neutral', holdUntil = 0, wasPlaying = false, spk = 0;
+let nextBlink = 1.5, blinkStart = -1, nextGaze = 1;
+const emoCur = {}, gaze = { x: 0, y: 0, tx: 0, ty: 0 };
+
+function detectEmotion(text){
+  const s = text.toLowerCase();
+  if (/(maaf|sedih|sayang sekali|sayangnya|kecewa|turut berduka)/.test(s)) return 'sad';
+  if (/(marah|kesal|jengkel|dilarang|tidak boleh)/.test(s)) return 'angry';
+  if (/(wah|astaga|tidak percaya|mengejutkan|kaget)/.test(s)) return 'surprised';
+  if (/(hmm|mungkin|sepertinya|kira-kira|bagaimana jika)/.test(s) || s.trim().endsWith('?')) return 'thinking';
+  if (/(senang|bahagia|hore|selamat|terima kasih|bagus|haha|hebat|asyik|!)/.test(s)) return 'happy';
+  return 'neutral';
+}
+
+function exprFrame(t){
+  const out = {};
+  const add = (k, v) => { out[k] = (out[k] || 0) + v; };
+  // emosi (berubah halus), area mulut dikecilkan saat bicara
+  if (wasPlaying && !playing) holdUntil = t + 1.5;
+  wasPlaying = playing;
+  spk += ((playing ? 1 : 0) - spk) * 0.1;
+  const sel = $('emo').value, inten = +$('emoI').value;
+  const name = sel !== 'auto' ? sel : (playing || t < holdUntil ? autoEmo : 'neutral');
+  const tgt = EMO[name] || {};
+  new Set([...Object.keys(emoCur), ...Object.keys(tgt)]).forEach(k => {
+    emoCur[k] = (emoCur[k] || 0) + ((tgt[k] || 0) * inten - (emoCur[k] || 0)) * 0.05;
+    add(k, emoCur[k] * (MOUTHKEY.test(k) ? 1 - 0.65 * spk : 1));
+  });
+  if (!$('idle').checked) return out;
+  // kedip acak
+  if (t >= nextBlink){
+    blinkStart = t;
+    nextBlink = t + (Math.random() < 0.15 ? 0.35 : 2.5 + Math.random() * 3.5);
+  }
+  if (blinkStart >= 0){
+    const p = (t - blinkStart) / 0.16;
+    if (p >= 1) blinkStart = -1;
+    else { const b = Math.sin(p * Math.PI); add('eyeBlinkLeft', b); add('eyeBlinkRight', b); }
+  }
+  // arah pandang berpindah pelan
+  if (t >= nextGaze){
+    nextGaze = t + 1.5 + Math.random() * 3;
+    const k = Math.random() < 0.5 ? 0.25 : 1;
+    gaze.tx = (Math.random() - 0.5) * 0.7 * k;
+    gaze.ty = (Math.random() - 0.5) * 0.4 * k;
+  }
+  gaze.x += (gaze.tx - gaze.x) * 0.08;
+  gaze.y += (gaze.ty - gaze.y) * 0.08;
+  const ax = Math.abs(gaze.x), ay = Math.abs(gaze.y);
+  add(gaze.x > 0 ? 'eyeLookInLeft' : 'eyeLookOutLeft', ax);
+  add(gaze.x > 0 ? 'eyeLookOutRight' : 'eyeLookInRight', ax);
+  add(gaze.y > 0 ? 'eyeLookUpLeft' : 'eyeLookDownLeft', ay);
+  add(gaze.y > 0 ? 'eyeLookUpRight' : 'eyeLookDownRight', ay);
+  // gerak mikro agar wajah tidak membeku
+  add('browInnerUp', 0.06 + 0.05 * Math.sin(t * 0.7) + 0.03 * Math.sin(t * 1.9 + 1));
+  const sm = (0.06 + 0.04 * Math.sin(t * 0.5 + 2)) * (1 - 0.6 * spk);
+  add('mouthSmileLeft', sm); add('mouthSmileRight', sm);
+  // alis ikut bergerak saat bicara
+  if (spk > 0.05){
+    const e = spk * (0.08 + 0.08 * Math.max(0, Math.sin(t * 2.3)));
+    add('browInnerUp', e); add('browOuterUpLeft', e); add('browOuterUpRight', e);
+  }
+  return out;
+}
+$('emoI').oninput = e => { $('emoIO').textContent = (+e.target.value).toFixed(2); };
 
 function pulse(code){
   speechSynthesis.cancel();
@@ -370,9 +455,10 @@ function tick(){
     if (it) auto = targetFor(it.code);
     else if (now > seq[seq.length - 1].end + 0.2) playing = false;
   }
+  const ex = exprFrame(performance.now() / 1000);
   for (const n of driven){
-    const tgt = Math.max(auto[n] || 0, manual[n] || 0);
-    cur[n] += (tgt - cur[n]) * 0.3;
+    const tgt = Math.min(1, Math.max((auto[n] || 0) + (ex[n] || 0), manual[n] || 0));
+    cur[n] += (tgt - cur[n]) * (/Blink/.test(n) ? 0.7 : 0.3);
     for (const m of meshes){
       const i = m.morphTargetDictionary[n];
       if (i !== undefined) m.morphTargetInfluences[i] = cur[n];
